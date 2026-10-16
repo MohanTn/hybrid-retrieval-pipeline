@@ -58,6 +58,7 @@ class Daemon:
         self.cfg = cfg or Config.load()
         self.socket_path = socket_path or self.cfg.socket_file()
         self._repos: dict[Path, RepoState] = {}
+        self._warming: set[Path] = set()
         self._embedder = None
         self._embedder_error: str | None = None
         self._embed_lock = threading.Lock()
@@ -271,6 +272,8 @@ class Daemon:
             }
         if op == "retrieve":
             return await self._retrieve(request)
+        if op == "warm":
+            return self._warm(request)
         if op == "shutdown":
             self._spawn(self._shutdown_soon())
             return {"ok": True}
@@ -281,6 +284,41 @@ class Daemon:
         await asyncio.sleep(0.05)
         if self._stopped is not None:
             self._stopped.set()
+
+    def _warm(self, request: dict) -> dict:
+        """Make sure a repo is indexed and watched, without making the caller wait for it.
+
+        Session-start hooks call this so the index exists before the first prompt that needs it.
+        An already-indexed repo is loaded inline (no cold index, so it is quick) and reports
+        "ready"; an unindexed one is indexed in a background task and reports "indexing".
+        """
+        raw_repo = request.get("repo")
+        if not raw_repo:
+            return {"ok": False, "error": "repo is required"}
+        repo_root = Path(raw_repo).resolve()
+        if not repo_root.is_dir():
+            return {"ok": False, "error": f"no such repo {repo_root}"}
+
+        if repo_root in self._warming:
+            return {"ok": True, "state": "indexing"}
+        if repo_root in self._repos or paths.db_path(repo_root).exists():
+            self._state(repo_root)
+            return {"ok": True, "state": "ready"}
+
+        self._warming.add(repo_root)
+        self._spawn(self._warm_in_background(repo_root))
+        return {"ok": True, "state": "indexing"}
+
+    async def _warm_in_background(self, repo_root: Path) -> None:
+        # Yield first so the "indexing" response is written before the cold index blocks the
+        # loop. The per-repo connection must be created on this thread (see module docstring).
+        await asyncio.sleep(0.05)
+        try:
+            self._state(repo_root)
+        except Exception:  # noqa: BLE001 - a failed warm must not kill the daemon
+            log.exception("warm failed for %s", repo_root)
+        finally:
+            self._warming.discard(repo_root)
 
     async def _retrieve(self, request: dict) -> dict:
         raw_repo = request.get("repo")

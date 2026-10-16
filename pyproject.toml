@@ -31,9 +31,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hybrid_retrieval"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"src/hybrid_retrieval/dashboard/static" = "hybrid_retrieval/dashboard/static"
+# dashboard/static ships via `packages` already; a force-include of it adds every file twice
+# and hatchling refuses to build the wheel.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

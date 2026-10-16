@@ -13,13 +13,13 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
 TIMEOUT_S = float(os.environ.get("HYBRID_RETRIEVAL_TIMEOUT", "3.0"))
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def socket_path() -> Path:
@@ -66,17 +66,16 @@ def autostart() -> None:
     """
     if os.environ.get("HYBRID_RETRIEVAL_NO_AUTOSTART"):
         return
-    python = PROJECT_ROOT / ".venv" / "bin" / "python"
-    if not python.exists():
+    binary = shutil.which("hybrid-retrieval")
+    if binary is None:
         return
     with contextlib.suppress(OSError):
         subprocess.Popen(
-            [str(python), "-m", "hybrid_retrieval.cli", "serve"],
+            [binary, "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
-            cwd=str(PROJECT_ROOT),
         )
 
 

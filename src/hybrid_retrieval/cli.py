@@ -355,6 +355,57 @@ def cmd_trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _spawn_daemon() -> None:
+    """Start `serve` detached. The daemon's singleton lock makes a racing spawn harmless."""
+    import contextlib
+    import os
+    import subprocess
+
+    if os.environ.get("HYBRID_RETRIEVAL_NO_AUTOSTART"):
+        return
+    with contextlib.suppress(OSError):
+        subprocess.Popen(
+            [sys.executable, "-m", "hybrid_retrieval.cli", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+
+def cmd_ensure(args: argparse.Namespace) -> int:
+    """Index and watch a repo in the background. Prints `ready`, `indexing`, or nothing.
+
+    Built for session-start hooks: it always exits 0 and never waits on the index itself.
+    """
+    import contextlib
+    import time
+
+    from .daemon import DaemonUnavailable, request
+
+    start = Path(args.repo).resolve() if args.repo else Path.cwd()
+    repo = paths.find_repo_root(start)
+    if repo is None:
+        return 0
+
+    payload = {"op": "warm", "repo": str(repo)}
+    try:
+        response = request(payload, timeout=5.0)
+    except DaemonUnavailable:
+        _spawn_daemon()
+        response = None
+        deadline = time.monotonic() + args.wait
+        while response is None and time.monotonic() < deadline:
+            time.sleep(0.2)
+            with contextlib.suppress(DaemonUnavailable):
+                response = request(payload, timeout=5.0)
+    if response is None or not response.get("ok"):
+        print("indexing")
+        return 0
+    print(response.get("state") or "indexing")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .daemon import serve
 
@@ -626,6 +677,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_cmd = sub.add_parser("serve", help="run the resident daemon")
     serve_cmd.set_defaults(func=cmd_serve)
+
+    ensure_cmd = sub.add_parser(
+        "ensure", help="start the daemon if needed and index this repo in the background"
+    )
+    ensure_cmd.add_argument("repo", nargs="?", default=None)
+    ensure_cmd.add_argument(
+        "--wait", type=float, default=5.0, help="seconds to wait for a freshly spawned daemon"
+    )
+    ensure_cmd.set_defaults(func=cmd_ensure)
 
     stop_cmd = sub.add_parser("stop", help="shut the resident daemon down")
     stop_cmd.set_defaults(func=cmd_stop)

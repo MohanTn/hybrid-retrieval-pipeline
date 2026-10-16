@@ -225,3 +225,63 @@ def test_shim_uses_only_the_standard_library():
 
     non_stdlib = imported - _sys.stdlib_module_names
     assert non_stdlib == set(), f"shim must not import {sorted(non_stdlib)}"
+
+
+# -- warm / ensure ----------------------------------------------------------
+
+
+def test_warm_indexes_in_the_background_then_reports_ready(daemon: Path, repo: Path):
+    import time
+
+    first = request({"op": "warm", "repo": str(repo)}, socket_path=daemon)
+    assert first == {"ok": True, "state": "indexing"}
+
+    deadline = time.monotonic() + 30
+    state = first["state"]
+    while state != "ready" and time.monotonic() < deadline:
+        time.sleep(0.2)
+        state = request({"op": "warm", "repo": str(repo)}, socket_path=daemon, timeout=30)["state"]
+    assert state == "ready"
+    assert (repo / ".retrieval" / "index.db").exists()
+
+
+def test_warm_rejects_a_missing_repo(daemon: Path, tmp_path: Path):
+    assert request({"op": "warm"}, socket_path=daemon)["ok"] is False
+    missing = {"op": "warm", "repo": str(tmp_path / "nope")}
+    assert request(missing, socket_path=daemon)["ok"] is False
+
+
+def _run_ensure(cwd: Path, socket_path: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "hybrid_retrieval.cli", "ensure", "--wait", "0.5"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(socket_path.parent),
+            "HYBRID_RETRIEVAL_SOCKET": str(socket_path),
+            "HYBRID_RETRIEVAL_NO_AUTOSTART": "1",
+        },
+    )
+
+
+def test_ensure_reports_indexing_for_a_new_repo(daemon: Path, repo: Path):
+    result = _run_ensure(repo, daemon)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "indexing"
+
+
+def test_ensure_without_a_daemon_still_exits_zero(repo: Path, tmp_path: Path):
+    result = _run_ensure(repo, tmp_path / "absent.sock")
+    assert result.returncode == 0
+    assert result.stdout.strip() == "indexing"
+
+
+def test_ensure_is_silent_outside_a_repo(daemon: Path, tmp_path: Path):
+    outside = tmp_path / "plain"
+    outside.mkdir()
+    result = _run_ensure(outside, daemon)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""

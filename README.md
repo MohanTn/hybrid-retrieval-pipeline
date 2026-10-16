@@ -13,6 +13,18 @@ LightGBM model trained on your repo's own git history. Everything runs locally.
 
 Pre-alpha. See the milestone table in `docs/SPEC.md` §10.
 
+## Install
+
+One command, no checkout needed (sparse retrieval; add `[dense]` to the URL spec for embeddings):
+
+```bash
+uv tool install git+https://github.com/MohanTn/hybrid-retrieval-pipeline
+hybrid-retrieval ensure   # in any repo: starts the daemon, indexes in the background
+```
+
+`ensure` prints `ready`, `indexing`, or nothing outside a git repo, and always exits 0, so it is
+safe to call from a session-start hook. Add `.retrieval/` to your global gitignore.
+
 ## Try it
 
 ```bash
